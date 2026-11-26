@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Math Coaster: Math Checks</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 900px; margin: 16px auto; padding: 0 16px; background: #f0ece0; color: #2a2418; line-height: 1.45; }
+  h1 { font-size: 1.3rem; }
+  .pass { color: #2d6b2d; } .fail { color: #8b2a0f; font-weight: 700; }
+  #summary { font-weight: 700; font-size: 1.1rem; }
+  iframe { width: 100%; height: 320px; border: 1px solid #8a7a5a; background: #fff; }
+  li { margin: 2px 0; }
+</style>
+</head>
+<body>
+<h1>Math Coaster: Math Checks</h1>
+<p>This page checks the tool's math with independent arithmetic. It covers every synthetic division sample, the worked example, the stated roots and remainders, the joins between pieces in every sample track, and the equation reader. Open it from the live site or a local web server, not as a file.</p>
+<div id="summary" role="status">Running...</div>
+<ol id="results"></ol>
+<iframe id="tool" src="index.html" title="The tool being checked"></iframe>
+<script>
+(function () {
+  'use strict';
+  var results = [], fails = 0;
+  function check(name, ok, detail) { results.push([name, !!ok, detail || '']); if (!ok) fails++; }
+  function near(a, b, t) { return Math.abs(a - b) <= (t === undefined ? 1e-9 : t); }
+  // p(x) by summing c·x^k directly (not Horner's method, which the tool uses).
+  function evalPoly(c, x) { var n = c.length - 1; return c.reduce(function (s, ci, i) { return s + ci * Math.pow(x, n - i); }, 0); }
+  // (x - r) · q(x) + rem, expanded, to compare with p's coefficients.
+  function rebuild(q, r, rem) { var out = q.concat([0]); for (var i = 0; i < q.length; i++) out[i + 1] -= r * q[i]; out[out.length - 1] += rem; return out; }
+
+  function run(win) {
+    var doc = win.document;
+
+    // ---- 1. Synthetic division: every sample problem ----
+    var SD = win.eval('SD_SAMPLES');
+    SD.forEach(function (s) {
+      var b = win.sdBuildSteps(s.coeffs, s.r), res = b.res, n = s.coeffs.length;
+      var q = res.slice(0, n - 1), rem = res[n - 1];
+      check('Division ' + s.name + ': remainder ' + rem + ' = p(' + s.r + ')', near(rem, evalPoly(s.coeffs, s.r), 1e-9), 'p(r) = ' + evalPoly(s.coeffs, s.r));
+      var back = rebuild(q, s.r, rem);
+      check('Division ' + s.name + ': (x − r)·quotient + remainder = p(x)', back.every(function (v, i) { return near(v, s.coeffs[i], 1e-9); }), 'quotient ' + q.join(', '));
+      for (var i = 1; i < n; i++) {
+        if (!near(b.prod[i], res[i - 1] * s.r) || !near(res[i], s.coeffs[i] + b.prod[i])) { check('Division ' + s.name + ': every multiply and add step', false, 'step ' + i); return; }
+      }
+      check('Division ' + s.name + ': every multiply and add step', true);
+      var isRoot = near(rem, 0, 1e-9), meta = s.meta;
+      var claimsRoot = /remainder = 0/.test(meta), claimsNot = /non-zero|≠ 0/.test(meta);
+      check('Division ' + s.name + ': label "' + meta + '" agrees with the remainder', (claimsRoot ? isRoot : true) && (claimsNot ? !isRoot : true) && (!/rational root/.test(meta)));
+    });
+    var frac = SD.filter(function (s) { return s.r === 0.5; })[0];
+    var cands = []; [1, 2, 4].forEach(function (p) { [1, 3].forEach(function (qq) { cands.push(p / qq, -p / qq); }); });
+    check('3x³ − 2x² + x − 4: ½ is not one of its possible rational roots (±p/q, p | 4, q | 3), so it is not labeled as one', cands.indexOf(0.5) < 0 && !/rational root/.test(frac.meta), frac.meta);
+
+    // ---- 2. The intro's worked example and stated roots ----
+    var mini = Array.prototype.map.call(doc.querySelectorAll('.sd-mini-table td'), function (td) { return td.textContent.replace('−', '-').trim(); }).filter(function (t) { return t !== ''; });
+    var ex = win.sdBuildSteps([1, -6, 11, -6], 2);
+    check('Intro example: 2 | 1 −6 11 −6 gives products 2, −8, 6 and results 1, −4, 3, 0', mini.join(' ') === '2 1 -6 11 -6 2 -8 6 1 -4 3 0' && ex.prod.slice(1).join() === '2,-8,6' && ex.res.join() === '1,-4,3,0', mini.join(' '));
+    check('Intro example: quotient x² − 4x + 3', /x² − 4x \+ 3/.test(doc.querySelector('.intro-sd-visual').textContent));
+    [1, 2, 3].forEach(function (r) { check('x³ − 6x² + 11x − 6 has a root at x = ' + r, near(evalPoly([1, -6, 11, -6], r), 0)); });
+    check('x³ + 8 has a root at x = −2 (its only real root)', near(evalPoly([1, 0, 0, 8], -2), 0));
+    check('2x³ + 3x² − 5x + 2: remainder at x = 1 equals p(1) = 2', near(win.sdBuildSteps([2, 3, -5, 2], 1).res[3], 2) && near(evalPoly([2, 3, -5, 2], 1), 2));
+
+    // ---- 3. The tool's result panel and column labels ----
+    win.sdLoadSample(SD[1]); win.sdStart(); win.sdSolveAll();
+    var result = doc.getElementById('sd-result-content').textContent;
+    check('Result panel: remainder 0, p(2) = 0, quotient x² − 4x + 3, "IS a root"', /Remainder0/.test(result.replace(/\s+/g, '')) && /p\(2\)\s*=\s*0/.test(result) && /x2 − 4x \+ 3/.test(result) && /IS a root/.test(result), result.replace(/\s+/g, ' ').slice(0, 160));
+    var labels = Array.prototype.map.call(doc.querySelectorAll('#sd-table-wrap > div > div'), function (d) { return d.textContent.trim(); });
+    check('Column labels under the table: x², x, x⁰, rem', labels.join(' ') === 'x2 x x⁰ rem', labels.join(' '));
+    win.sdLoadSample({ name: 'x² − 4x + 4', coeffs: [1, -4, 4], r: 2, meta: '' }); win.sdDrawGraph();
+    check('Double root (x² − 4x + 4 at x = 2): the graph note says "touches or crosses"', /touches or crosses/.test(doc.getElementById('graph-rem-readout').textContent));
+    win.sdLoadSample(SD[5]); win.sdStart(); win.sdSolveAll();
+    check('x³ + 8 ÷ (x + 2): quotient x² − 2x + 4 (no "+ 0" terms)', /x2 − 2x \+ 4/.test(doc.getElementById('sd-result-content').textContent) && !/\+ 0/.test(doc.getElementById('sd-result-content').textContent));
+
+    // ---- 4. Sample tracks: every join between pieces ----
+    var RC = win.eval('RC_SAMPLES');
+    RC.forEach(function (s) {
+      for (var i = 1; i < s.segs.length; i++) {
+        var a = s.segs[i - 1], b = s.segs[i], x = parseFloat(a.xmax);
+        var ya = win.rcSafeEval(a.expr, x), yb = win.rcSafeEval(b.expr, parseFloat(b.xmin));
+        check(s.name + ': piece ' + i + ' meets piece ' + (i + 1) + ' at x = ' + a.xmax, a.xmax === b.xmin && ya !== null && yb !== null && Math.abs(ya - yb) < 0.05, 'y = ' + (ya === null ? '?' : ya.toFixed(4)) + ' and ' + (yb === null ? '?' : yb.toFixed(4)));
+      }
+      win.rcLoadSample(s);
+      var badges = Array.prototype.map.call(doc.querySelectorAll('.seg-connect'), function (e) { return e.classList.contains('ok'); });
+      check(s.name + ': the app marks every join "continuous"', badges.length === s.segs.length - 1 && badges.every(Boolean));
+    });
+    check('Classic Hill: −1.5(x − 4)² + 6 is 0 at x = 2 and x = 6', near(win.rcSafeEval('0-1.5*(x-4)^2+6', 2), 0) && near(win.rcSafeEval('0-1.5*(x-4)^2+6', 6), 0));
+    check('Summit Drop: the second piece starts with slope 2, matching y = 2x', near((win.rcSafeEval('0-(x-4)^2+2*(x-4)+8', 4.000001) - 8) / 0.000001, 2, 1e-3));
+    check('The Plunge: −(x − 5)² + 3.2 lands at x = 5 + √3.2 ≈ 6.789', near(5 + Math.sqrt(3.2), 6.789, 0.0005));
+    check('Double Wave: 2 sin x ends at 4π ≈ 12.566', near(4 * Math.PI, 12.566, 0.0005));
+    win.rcLoadSample({ name: 'gap test', view: { xmin: 0, xmax: 5, ymin: -1, ymax: 5 }, segs: [{ expr: 'x', xmin: '0', xmax: '2' }, { expr: 'x+1', xmin: '2', xmax: '4' }] });
+    check('A track with a jump (y = x then y = x + 1 at x = 2) is marked "discontinuous"', doc.querySelector('.seg-connect').classList.contains('gap'));
+
+    // ---- 5. The equation reader ----
+    [['-(x-4)^2+6', 4, 6], ['-(x-4)²+6', 2, 2], ['2·sin(x)', Math.PI / 2, 2], ['2sin(x)', Math.PI / 2, 2], ['2x', 3, 6], ['2(x+1)', 1, 4], ['x(x-2)', 3, 3],
+     ['x^-2', 2, 0.25], ['3+-x^2', 2, -1], ['-x^2+4', 1, 3], ['0-1.5*(x-4)^2+6', 2, 0], ['3*cos(pi*(x-1)/2)', 5, 3], ['0.05*x^3', 4, 3.2], ['−x+5', 1, 4], ['2*-x', 3, -6], ['(-x)^2', 3, 9]].forEach(function (t) {
+      var got = win.rcSafeEval(t[0], t[1]);
+      check('Equation reader: y = ' + t[0] + ' at x = ' + (+t[1].toFixed(4)) + ' gives ' + t[2], got !== null && near(got, t[2], 1e-9), 'got ' + got);
+    });
+
+    // ---- 6. Words that must match the code ----
+    var text = doc.body.textContent;
+    check('Intro says pieces connect "with no gaps" (the app checks endpoints, not slopes)', /connect with no gaps/.test(text) && !/connect smoothly/.test(text));
+    check('Intro says the ride slows uphill and speeds up downhill (as the code does)', /slows down going uphill and speeds up going downhill/.test(text) && !/steeper the slope, the faster/.test(text));
+
+    // ---- 7. Accessibility basics ----
+    function lum(hex) { var h = hex.replace('#', ''), c = [0, 2, 4].map(function (i) { var v = parseInt(h.substr(i, 2), 16) / 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; }
+    function contrast(a, b) { var x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); }
+    var rs = win.getComputedStyle(doc.documentElement);
+    ['--bg', '--surface', '--surface3'].forEach(function (bg) {
+      var a = rs.getPropertyValue('--text3').trim(), b = rs.getPropertyValue(bg).trim();
+      check('Contrast: hint text on ' + bg + ' (' + a + ' on ' + b + ')', contrast(a, b) >= 4.5, contrast(a, b).toFixed(2) + ':1');
+    });
+    function key(el, k, shift) { el.dispatchEvent(new win.KeyboardEvent('keydown', { key: k, shiftKey: !!shift, bubbles: true })); }
+    var chips = doc.querySelectorAll('.sample-chip');
+    check('Keyboard: all ' + chips.length + ' sample chips are focusable buttons', chips.length === RC.length + SD.length && Array.prototype.every.call(chips, function (c) { return c.tabIndex === 0 && c.getAttribute('role') === 'button'; }));
+    win.eval('rcSegments = []; rcRenderSegList();');
+    key(doc.querySelector('#rc-sample-grid .sample-chip'), 'Enter');
+    check('Keyboard: Enter on a track sample loads it', win.eval('rcSegments').length === RC[0].segs.length);
+    check('The track picture is described in words', /^Coaster track: segment 1, y = /.test(doc.getElementById('rc-canvas').getAttribute('aria-label') || ''), (doc.getElementById('rc-canvas').getAttribute('aria-label') || '').slice(0, 90));
+    var unnamed = Array.prototype.filter.call(doc.querySelectorAll('input, button'), function (b) { return !(b.getAttribute('aria-label') || b.textContent.trim() || b.title); });
+    check('Every box and button has a name', unnamed.length === 0, unnamed.map(function (b) { return b.id || b.className; }).join(', '));
+    var thumb = doc.getElementById('domain-thumb-right'), before = win.eval('sdDomainMax');
+    key(thumb, 'ArrowLeft', true);
+    check('Keyboard: the track-segment handles move with the arrow keys', thumb.getAttribute('role') === 'slider' && near(win.eval('sdDomainMax'), before - 1, 1e-9) && thumb.getAttribute('aria-valuenow') === (before - 1).toFixed(1));
+    check('Results and the graph note are read aloud', ['anim-label', 'sd-result-content', 'graph-rem-readout'].every(function (id) { return doc.getElementById(id).getAttribute('aria-live') === 'polite'; }));
+    check('Focus outlines show, and motion stops when the device asks for less', /\*:focus-visible/.test(doc.documentElement.outerHTML) && /prefers-reduced-motion: reduce/.test(doc.documentElement.outerHTML));
+
+    // ---- 8. Privacy ----
+    var html = doc.documentElement.outerHTML.replace(/http:\/\/www\.w3\.org\/2000\/svg/g, '');
+    ['https://', 'http://', '<link', '@import', 'fetch(', 'XMLHttpRequest', 'sendBeacon', 'localStorage', 'sessionStorage', 'indexedDB', 'document.cookie'].forEach(function (bad) {
+      check('Privacy: no "' + bad + '"', html.indexOf(bad) < 0);
+    });
+    show();
+  }
+
+  function show() {
+    var list = document.getElementById('results');
+    results.forEach(function (r) {
+      var li = document.createElement('li'); li.className = r[1] ? 'pass' : 'fail';
+      li.textContent = (r[1] ? '✓ ' : '✗ ') + r[0] + (r[2] ? '  (' + r[2] + ')' : '');
+      list.appendChild(li);
+    });
+    document.getElementById('summary').textContent = (results.length - fails) + ' of ' + results.length + ' passed' + (fails ? '. ' + fails + ' failed.' : '.');
+  }
+
+  var frame = document.getElementById('tool');
+  frame.addEventListener('load', function () {
+    setTimeout(function () {
+      try { run(frame.contentWindow); } catch (e) { check('The checks could run', false, e.message + ' (open this page from a web server, not as a file)'); show(); }
+    }, 300);
+  });
+})();
+</script>
+</body>
+</html>
